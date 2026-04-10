@@ -264,6 +264,63 @@ Password: admin
 
 ---
 
+## 🔥 VPS Firewall / Cloud Security Group Setup
+
+> This is one of the most commonly missed steps. Even if Docker containers are running and listening on ports 80/443, the **cloud provider's external firewall (e.g. Azure NSG)** may still be blocking those ports. You must open them at the cloud level too.
+
+### For Azure VPS (52.140.52.144)
+1. Go to **Azure Portal → Virtual Machines → `<your-vm>` → Networking**
+2. Under **Inbound port rules**, add:
+
+| Priority | Name | Port | Protocol | Action |
+|---|---|---|---|---|
+| 310 | Allow-HTTP | 80 | TCP | Allow |
+| 320 | Allow-HTTPS | 443 | TCP | Allow |
+
+3. Save. Changes take effect within ~30 seconds.
+
+> ⚠️ **Do not confuse this with your home router port forwarding.** The backend runs on the Azure VPS — that's where the firewall rules must be set. Your home router is irrelevant for VPS deployments.
+
+### How to verify ports are actually open (from outside)
+```bash
+# From any external machine (PowerShell on Windows)
+Test-NetConnection -ComputerName 52.140.52.144 -Port 80
+Test-NetConnection -ComputerName 52.140.52.144 -Port 443
+# TcpTestSucceeded : True = port is open and a service is listening
+# TcpTestSucceeded : False = either firewall is blocking OR no service is listening
+```
+
+Or use online tools:
+- https://www.yougetsignal.com/tools/open-ports/
+- https://portchecker.co/
+
+### Why ports still show as "Closed" after router rules
+Two separate layers control port access:
+1. **Cloud/VPS firewall (Azure NSG)** — external network-level firewall
+2. **The service itself** — a container/process must actually be LISTENING on that port
+
+Both must be satisfied. If Docker containers are stopped, ports appear closed even if firewall allows them. If firewall blocks them, ports appear closed even if Docker is running.
+
+---
+
+## 🌐 Public IP — IPv4 vs IPv6 Gotcha
+
+When checking your public IP, you may get an **IPv6 address** instead of IPv4. Port checking tools often don't support IPv6, giving false "closed" results.
+
+```powershell
+# Get IPv4 specifically
+curl.exe -4 ifconfig.me
+# Returns e.g.: 49.43.228.139  ← this is your real IPv4
+
+# Get IPv6 (may be returned by default)
+curl.exe ifconfig.me
+# Returns e.g.: 2405:201:c038:b03e:98b7:d651:4215:942d  ← IPv6, use with caution
+```
+
+Always use the **IPv4 address** when testing port access with online tools. Paste it manually into the port checker if the auto-detect picks up IPv6.
+
+---
+
 ## 🚀 Full Deployment Procedure (Step by Step)
 
 ### BACKEND DEPLOYMENT (VPS via GitHub Actions)
@@ -383,12 +440,26 @@ echo ${{ secrets.SERVER_PASSWORD }} | sudo -S docker-compose up -d --build
 ---
 
 ### ERROR 5 — CORS error: frontend blocked by backend
-**Symptom:** Browser console shows `Access-Control-Allow-Origin` error when API is called.
-**Root Cause:** `FRONTEND_URL` in `docker-compose.yml` was set to `http://sitelive.in` but the frontend is served over HTTPS (`https://sitelive.in`). The scheme mismatch caused CORS to reject the request.
+**Symptom:** Browser console shows `Access-Control-Allow-Origin` error when API is called. All API requests fail with HTTP 403 or CORS blocked.
+**Root Cause:** `FRONTEND_URL` in `docker-compose.yml` was set to `http://sitelive.in` but the frontend is served over HTTPS (`https://sitelive.in`). The Spring Security `SecurityConfig.java` reads this env var and sets it as the **only allowed CORS origin**:
+```java
+@Value("${frontend.url}")
+private String frontendUrl;
+
+configuration.setAllowedOrigins(List.of(frontendUrl));  // Exact match — scheme matters!
+```
+HTTP and HTTPS are treated as **different origins**. A browser making a request from `https://sitelive.in` to `api.sitelive.in` sends `Origin: https://sitelive.in`. If the backend's allowed origin is only `http://sitelive.in`, CORS fails silently.
+
 **Fix:** Changed env var in `docker-compose.yml`:
 ```yaml
-- FRONTEND_URL=https://sitelive.in    # Must match EXACT scheme/domain the browser uses
+- FRONTEND_URL=https://sitelive.in    # Must match EXACT scheme/domain the browser sends in Origin header
 ```
+
+**CORS Checklist for future deployments:**
+- [ ] `FRONTEND_URL` uses `https://` (never `http://` in production)
+- [ ] No trailing slash on the URL (`https://sitelive.in` ✅ not `https://sitelive.in/` ❌)
+- [ ] After changing, redeploy Docker containers so the new env var takes effect
+- [ ] Test in browser DevTools → Network tab → check response headers for `Access-Control-Allow-Origin`
 
 ---
 
@@ -479,11 +550,15 @@ sudo docker ps
 
 ## 📝 Notes for AI Agents Executing This
 
-1. **Always check DNS before assuming network issues.** Run `Resolve-DnsName api.sitelive.in` — if it returns the right IP, the problem is on the server.
+1. **Always check DNS before assuming network issues.** Run `Resolve-DnsName api.sitelive.in` — if it returns the right IP (`52.140.52.144`), the problem is on the server side.
 2. **Always verify the built JS contains the right API URL** before uploading to Hostinger. Use `Select-String` or `grep` on the dist assets.
-3. **`FRONTEND_URL` in docker-compose MUST use `https://`** — this is the CORS allowed origin. HTTP vs HTTPS mismatch = silent CORS failure.
+3. **`FRONTEND_URL` in docker-compose MUST use `https://`** — this is the CORS allowed origin. HTTP vs HTTPS mismatch = silent CORS failure. No trailing slash.
 4. **Hostinger shared hosting does NOT support `mod_proxy`**. Never add `[P]` flags in `.htaccess`.
-5. **Caddy handles SSL automatically.** Do not install certbot or any other SSL tool. Just ensure ports 80/443 are open and DNS is correct.
+5. **Caddy handles SSL automatically.** Do not install certbot or any other SSL tool. Just ensure ports 80/443 are open at the Azure NSG level and DNS is correct.
 6. **The `DataSeeder.java` runs on startup** and creates `admin@tomato.com` / `admin` if it doesn't exist yet. No manual DB seeding.
 7. **To manually trigger CI/CD** without a code change: GitHub repo → Actions → "Deploy Application" → "Run workflow".
 8. **Docker prune before rebuild** to avoid stale layers consuming disk: `sudo docker system prune -f`.
+9. **Ports closed = two possible causes**: (a) Azure NSG / cloud firewall not configured, OR (b) Docker containers not running. Check both separately.
+10. **When checking public IP, force IPv4**: use `curl.exe -4 ifconfig.me`. Online port checkers typically don't support IPv6 — always test with IPv4.
+11. **CORS is enforced in `SecurityConfig.java`** via `setAllowedOrigins(List.of(frontendUrl))`. Only one origin is allowed — it must be an exact string match including scheme. If the frontend domain ever changes, update `FRONTEND_URL` in `docker-compose.yml` and redeploy.
+12. **The VPS and your home router are completely separate.** Opening ports on your home router does nothing for the VPS. Always configure the Azure NSG for the VPS.
