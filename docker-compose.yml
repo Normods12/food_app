@@ -13,7 +13,7 @@ services:
       - DB_USERNAME=tomato_user
       - DB_PASSWORD=tomato_password
       - DB_DIALECT=org.hibernate.dialect.PostgreSQLDialect
-      - FRONTEND_URL=http://sitelive.in
+      - FRONTEND_URL=https://sitelive.in
     depends_on:
       - db
     restart: always
