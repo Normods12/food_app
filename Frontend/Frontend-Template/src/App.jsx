@@ -16,7 +16,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter basename="/food-del">
       <Toaster position="top-right" />
       <AppNavbar />
 
