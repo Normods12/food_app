@@ -32,4 +32,4 @@ jobs:
             cd /home/gameon/Food_Del
             # Clean up old images to save space on server
             echo ${{ secrets.SERVER_PASSWORD }} | sudo -S docker system prune -f
-            echo ${{ secrets.SERVER_PASSWORD }} | sudo -S docker-compose up -d --build
+            echo ${{ secrets.SERVER_PASSWORD }} | sudo -S docker-compose up -d --build --remove-orphans
