@@ -31,5 +31,5 @@ jobs:
           script: |
             cd /home/gameon/Food_Del
             # Clean up old images to save space on server
-            docker system prune -f
-            docker-compose up -d --build
+            echo ${{ secrets.SERVER_PASSWORD }} | sudo -S docker system prune -f
+            echo ${{ secrets.SERVER_PASSWORD }} | sudo -S docker-compose up -d --build
